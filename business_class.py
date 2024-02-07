@@ -12,6 +12,10 @@ class Entity(msgspec.Struct):
     name_id : ForeignKey
     address_id : ForeignKey
     
+    def label(self): 
+        if self.name_id:
+            return getattr(self, 'name_id')['label']
+    
     def simplify(self):
         td = {}
         for f in self.__struct_fields__:
