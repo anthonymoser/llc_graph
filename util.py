@@ -48,6 +48,8 @@ def get_name_ids(search_value):
     data = msgspec.json.decode(response.content)
     return [d['id'] for d in data]
 
+
+
 def get_address_ids(search_value): 
     url = f"{endpoint}/companies/addresses.json?_shape=array&street__like={search_value}"
     response = requests.get(url)
@@ -55,8 +57,15 @@ def get_address_ids(search_value):
     return [d['id'] for d in data]
 
 
-def add_address(G, entity, node_id):
-   
+def get_entities_by_file_number(search_value):
+    search_value = "%" + search_value + "%"
+    url = f"{endpoint}/companies/entities.json?_labels=on&_shape=array&file_number__like={search_value}"
+    response = requests.get(url)
+    data = msgspec.json.decode(response.content)
+    return [ Entity(**d) for d in data ]
+
+
+def add_address(G, entity, node_id):   
     address_node_id = f"A{entity.address_id['value']}"
     address_node_label = entity.address_id['label']
     if address_node_id not in G:
@@ -140,8 +149,9 @@ def graph_entity(G, entity):
     
 
 def graph_entities(G:nx.MultiGraph, entities:list) ->nx.MultiGraph: 
-    for e in entities: 
-        G = graph_entity(G, e)
+    for e in entities:
+        if e.label() not in ["SAME", "NONE"]:
+            G = graph_entity(G, e)
     return G 
 
 
@@ -154,21 +164,23 @@ def fix_unlabeled_nodes(G):
 
      
 def expand_graph(G:nx.MultiGraph, node_list = []) ->nx.MultiGraph:
+    entities = []
+    node_ids = []
     if len(node_list) == 0:
         print("expanding all nodes")
         gids = get_graph_ids(G)
-        entities = []
         for g in gids:
             gids[g] = get_alias_ids(G, gids[g])
-            entities += expand_nodes(gids[g])
+            node_ids += gids[g]
+            # entities += expand_nodes(gids[g])
     else: 
         print("expanding nodes", node_list)
-        alias_ids = get_alias_ids(G, node_list)
-        entities = expand_nodes(alias_ids)
+        node_ids = get_alias_ids(G, node_list)
         
-    G = graph_entities(G, entities)
-    G = fix_unlabeled_nodes(G)
-    return G 
+    entities = expand_nodes(list(set(node_ids)))        
+    # G = graph_entities(G, entities)
+    # G = fix_unlabeled_nodes(G)
+    return entities
 
 
 def extract_name_parts(G:nx.MultiGraph):
@@ -176,7 +188,7 @@ def extract_name_parts(G:nx.MultiGraph):
     for n in G.nodes:
         try:
             node = G.nodes[n]
-            if node['type'] == "person":
+            if node['type'] != "address":
                 name = G.nodes[n]['label'].replace('.', '').strip()
                 if name[-5:] == " SAME":
                     name = name.replace(" SAME", "")
@@ -195,7 +207,7 @@ def extract_name_parts(G:nx.MultiGraph):
             records.append(record)
     
     return pd.DataFrame(records).fillna('')
-    
+
 
 def extract_street_parts(G:nx.MultiGraph):
     records = []
@@ -238,8 +250,9 @@ def tidy_up(G, ignore_middle_initial = True):
     street_grouping = ['AddressNumber', 'StreetName']
     # sr.to_csv('sr.to_csv', index=False)
     
-    nd = get_probable_duplicates(nf, name_grouping)
-    sd = get_probable_duplicates(sr, street_grouping)
+    
+    nd = get_probable_duplicates(nf, name_grouping) if len(nf) > 0 else []
+    sd = get_probable_duplicates(sr, street_grouping) if len(sr) > 0 else []
     duplicates = nd + sd
     for d in duplicates:
         # print(d)
@@ -259,7 +272,21 @@ def get_probable_duplicates(df, grouping):
     return [pd.split(';') for pd in list(probable_duplicates.node_id)]
 
 
-def combine_entitity_list(current:list, new_entities:list):
-    eids = list(set([c.id for c in current]))
-    new_list = current + [ne for ne in new_entities if ne.id not in eids]
-    return new_list
+def combine_entitity_list(entity_lists:list):
+    
+    combined = entity_lists.pop()
+    for e_list in entity_lists:
+        ids = list(set([c.id for c in combined]))
+        combined = combined + [e for e in e_list if e.id not in ids]
+    
+    return combined
+
+
+def clean_columns(df:pd.DataFrame)->pd.DataFrame:
+    # df = df.convert_dtypes()
+    lowercase = { 
+        c: c.lower().strip().replace(' ', '_') 
+        for c in df.columns }
+    df = df.rename(columns=lowercase)
+    return df
+

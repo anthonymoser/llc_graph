@@ -12,14 +12,39 @@ class Entity(msgspec.Struct):
     name_id : ForeignKey
     address_id : ForeignKey
     
+    def node(self):
+        params = {}
+        match self.type:
+            case "president" | "secretary" | "agent" | "manager":
+                params["id"] = f"N{self.name_id['value']}"
+                params["label"] = self.name_id['label']
+                
+    # def links(self):
+    #     return [(self.)]
+    def label(self): 
+        if self.name_id:
+            return getattr(self, 'name_id')['label']
+    
     def simplify(self):
-        td = {}
-        for f in self.__struct_fields__:
-            if f in ['name_id', 'address_id']:
-                td[f.split('_')[0]] = getattr(self,f)['label']
-            else: 
-                td[f] = getattr(self, f)
+        name = self.name_id['label'] if self.name_id else ""
+        address = self.address_id['label'] if self.address_id else ""
+        td = {
+            "id": self.id, 
+            "file_number": self.file_number, 
+            "type": self.type, 
+            "name": name, 
+            "address": address
+        }
         return td 
+
+
+
+class Node(msgspec.Struct):
+    id : str 
+    label : str 
+    type : str 
+    source : str = "il_sos"
+    attr : dict = {}
     
 class Address(msgspec.Struct):
     """An address tied to a person or company with some relationship to a specific company"""
