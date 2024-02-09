@@ -23,9 +23,9 @@ app_ui = ui.page_fillable(
         ui.h2("Dese Guys"),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_text("name_search", "Search by name", "Michael Tadin%"),
-                ui.input_text("addr_search", "Search by address"),
-                ui.input_text("file_number_search", "Search by file number"),
+                ui.input_text("name_search", "Search for names", "Michael Tadin%"),
+                ui.input_text("addr_search", "Search for addresses"),
+                ui.input_text("file_number_search", "Search for file numbers"),
                 ui.input_task_button("search_btn", "Search"),
                 ui.input_task_button("expand_btn", "Expand"),
                 ui.input_selectize("selected_nodes", "Select nodes", choices=[], multiple=True),  
@@ -196,6 +196,7 @@ def server(input, output, session):
         for c in manually_combined():
             new_graph = combine_nodes(new_graph, c)
         G.set(new_graph)
+        entities.set(entities() + new_entities)
         builds = build_count() + 1
         build_count.set(builds) 
 
@@ -296,7 +297,7 @@ def server(input, output, session):
                 .assign(company = lambda df: df.file_number.apply(lambda n: G().nodes[n].get('label', n)))  
                 .sort_values(['company', 'type'])
                 [['id', 'file_number', 'company','type', 'name', 'address']]
-            ).to_csv(buf, index=False)
+            ).drop_duplicates().to_csv(buf, index=False)
             yield buf.getvalue()
             
     # @render.data_frame
