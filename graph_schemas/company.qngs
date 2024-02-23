@@ -1,0 +1,18 @@
+{
+	"node_factories": {
+
+		"company": {
+			"id_field": "file_number",
+			"label_field": "name",
+			"type": {
+				"type": "static",
+				"value": "company"
+			},
+			"attr": [
+				"dg_type"
+			],
+			"tidy": "name"
+		}
+	},
+	"link_factories": []
+}

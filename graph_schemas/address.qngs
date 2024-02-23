@@ -1,0 +1,17 @@
+{
+	"node_factories": {
+		"address": {
+			"id_field": "address_id",
+			"label_field": "address",
+			"type": {
+				"type": "static",
+				"value": "address"
+			},
+			"attr": [
+				"dg_type"
+			],
+			"tidy": "address"
+		}
+	},
+	"link_factories": []
+}
