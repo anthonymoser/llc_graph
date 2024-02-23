@@ -1,0 +1,17 @@
+{
+	"node_factories": {
+		"name": {
+			"id_field": "name_id",
+			"label_field": "name",
+			"type": {
+				"type": "static",
+				"value": "name"
+			},
+			"attr": [
+				"dg_type"
+			],
+			"tidy": "name"
+		}
+	},
+	"link_factories": []
+}

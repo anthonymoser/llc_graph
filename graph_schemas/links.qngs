@@ -1,0 +1,27 @@
+{
+	"node_factories": {},
+	"link_factories": [
+		{
+			"source_field": "name_id",
+			"target_field": "file_number",
+			"type": {
+				"type": "field",
+				"value": "type"
+			},
+			"attr": [
+
+			]
+		},
+		{
+			"source_field": "name_id",
+			"target_field": "address_id",
+			"type": {
+				"type": "field",
+				"value": "type"
+			},
+			"attr": [
+				"file_number"
+			]
+		}
+	]
+}

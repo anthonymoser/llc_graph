@@ -1,0 +1,96 @@
+{
+	"node_factories": {
+		"department": {
+			"id_field": "department",
+			"label_field": null,
+			"type": {
+				"type": "static",
+				"value": "department"
+			},
+			"attr": [
+
+			],
+			"tidy": null
+		},
+		"result_id": {
+			"id_field": "result_id",
+			"label_field": "result_id",
+			"type": {
+				"type": "static",
+				"value": "contract"
+			},
+			"attr": [
+				"approval_date",
+				"award_amount",
+				"contract_pdf",
+				"end_date",
+				"procurement_type",
+				"purchase_order_contract_number",
+				"specification_number",
+				"revision_number",
+				"start_date",
+				"purchase_order_description"
+			],
+			"tidy": null
+		},
+		"vendor_name": {
+			"id_field": "vendor_name",
+			"label_field": null,
+			"type": {
+				"type": "static",
+				"value": "vendor_name"
+			},
+			"attr": [
+
+			],
+			"tidy": "name"
+		},
+		"node_id": {
+			"id_field": "node_id",
+			"label_field": "address_1",
+			"type": {
+				"type": "static",
+				"value": "address"
+			},
+			"attr": [
+
+			],
+			"tidy": "address"
+		}
+	},
+	"link_factories": [
+		{
+			"source_field": "result_id",
+			"target_field": "vendor_name",
+			"type": {
+				"type": "static",
+				"value": "contract"
+			},
+			"attr": [
+				"award_amount"
+			]
+		},
+		{
+			"source_field": "result_id",
+			"target_field": "node_id",
+			"type": {
+				"type": "static",
+				"value": "contract"
+			},
+			"attr": [
+
+			]
+		},
+		{
+			"source_field": "department",
+			"target_field": "result_id",
+			"type": {
+				"type": "static",
+				"value": "contract"
+			},
+			"attr": [
+				"award_amount"
+			]
+		}
+	]
+}
