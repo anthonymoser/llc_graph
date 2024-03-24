@@ -16,8 +16,8 @@
 			"source_field": "name_id",
 			"target_field": "address_id",
 			"type": {
-				"type": "field",
-				"value": "type"
+				"type": "static",
+				"value": "address"
 			},
 			"attr": [
 				"file_number"

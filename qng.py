@@ -117,13 +117,13 @@ class GraphFactory(msgspec.Struct):
             nodes += self.nx_nodes(d, data_source)
             edges += self.nx_edges(d)
                     
-        G = nx.MultiGraph()
+        G = nx.MultiDiGraph()
         G.add_nodes_from(nodes)
         G.add_edges_from(edges)
         return G 
     
     def make_graph(self, data:dict, data_source:str):
-        G = nx.MultiGraph()
+        G = nx.MultiDiGraph()
         G.add_nodes_from(self.nx_nodes(data, data_source))
         G.add_edges_from(self.nx_edges(data))
         return G 
@@ -204,7 +204,7 @@ class QNG(msgspec.Struct):
     node_attrs: dict
     sigma_factory: SigmaFactory
     def multigraph(self):
-        MG = nx.from_dict_of_dicts(self.adjacency, multigraph_input=True, create_using=nx.MultiGraph)
+        MG = nx.from_dict_of_dicts(self.adjacency, multigraph_input=True, create_using=nx.MultiDiGraph)
         nx.set_node_attributes(MG, self.node_attrs)
         return MG 
     
