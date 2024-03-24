@@ -9,9 +9,10 @@ import json
 from business_class import Entity
 from sodapy import Socrata
 from address_util import get_label
-
+import io 
 
 endpoint = "https://companies-mvwuoztvlq-uc.a.run.app"
+
 data_portal_url = "data.cityofchicago.org"
 client = Socrata(data_portal_url, None)
 
@@ -29,31 +30,8 @@ large_layout = {
         "edgeWeightInfluence":1
 }
 
-def get_excluded_nodes(G):
-    return [ n for n in G.nodes() if has_excluded_name(G.nodes[n]['label']) ]
-    
 
-def has_excluded_name(node_label:str):
-    excluded = ["INVOLUNTARY", "VACANT", "VACATED", "SOLE OFFICER", "None", "SAME ", "REVOKED ", " DISSOLUTION", "UNACCEPTABLE ", "MERGED "]
-    for e in excluded:
-        if e in node_label:
-            return True 
-    
-    # if no excluded terms are in the node label, return false 
-    return False 
-
-
-def get_alias_ids(G, nodes:list):
-    full_list = []
-    for n in nodes:
-        if has_excluded_name(G.nodes[n]['label']) is False:
-            try:
-                full_list += G.nodes[n]['alias_ids']
-            except Exception as e:
-                full_list.append(n)
-    return full_list 
-
-
+### DATA FUNCTIONS ###
 def paginate(url):
     items = []
     while url:
@@ -78,10 +56,6 @@ def get_companies(file_numbers:list):
     return [ Entity(**d) for d in data ]
 
 
-def get_unlabeled_companies(G):
-    return [n for n in G.nodes if 'label' not in G.nodes[n].keys()]
-
-
 def get_name_ids(search_value):
     url = f"{endpoint}/companies/names.json?_shape=array&name__like={search_value}"
     data = paginate(url)
@@ -98,6 +72,80 @@ def get_entities_by_file_number(search_value):
     url = f"{endpoint}/companies/entities.json?_labels=on&_shape=array&file_number__like={search_value}"
     data = paginate(url)
     return [ Entity(**d) for d in data ]
+
+
+def clean_columns(df:pd.DataFrame)->pd.DataFrame:
+    lowercase = { 
+        c: c.lower().strip().replace(' ', '_') 
+        for c in df.columns }
+    df = df.rename(columns=lowercase)
+    return df
+
+
+
+### GRAPH FUNCTIONS ###
+
+def graph_entities(G, gfs:dict, entities:list, merged:list):
+    G = nx.compose(G, gfs['company'].make_graphs([ e.company_dict() for e in entities ], "il_sos"))
+    G = nx.compose(G, gfs['name'].make_graphs([ e.name_dict() for e in entities ],"il_sos"))
+    G = nx.compose(G, gfs['address'].make_graphs([e.address_dict() for e in entities ], "il_sos"))   
+    G = nx.compose(G, gfs['links'].make_graphs([e.link_dict() for e in entities], "il_sos"))
+    
+    unlabeled = get_unlabeled_companies(G)
+    while len(unlabeled) > 0:
+        print(f"getting data for {len(unlabeled)} companies")
+        companies = get_companies(unlabeled)
+        G = nx.compose(G, gfs['company'].make_graphs([ c.company_dict() for c in companies ], "il_sos"))
+        unlabeled = get_unlabeled_companies(G)
+
+    for m in merged: 
+        G = combine_nodes(G, m)
+    
+    excluded_nodes = get_excluded_nodes(G)
+    for en in excluded_nodes:
+        try:
+            if " DISSOLUTION" in G.nodes[en]['label'] or "REVOKED " in G.nodes[en]['label']:
+                for nbr in G.neighbors(en):
+                    if G.nodes[nbr]['type'] == "company":
+                        G.nodes[nbr]['type'] = "company (inactive)"
+                    
+            G.remove_node(en)    
+        except Exception as e:
+            print(e, en)
+            continue 
+
+    if len(G) > 0:
+        G = deduplicate_edges(G)
+    return G 
+
+    
+
+def get_excluded_nodes(G):
+    return [ n[0] for n in G.nodes(data='label', default= "") if has_excluded_name(n[1]) ]
+    
+
+def has_excluded_name(node_label:str):
+    excluded = ["INVOLUNTARY", "VACANT", "VACATED", "SOLE OFFICER", "None", "SAME ", "REVOKED ", " DISSOLUTION", "UNACCEPTABLE ", "MERGED ", "WITHDRAWN"]
+    for e in excluded:
+        if e in node_label:
+            return True 
+    # if no excluded terms are in the node label, return false 
+    return False 
+
+
+def get_alias_ids(G, nodes:list):
+    full_list = []
+    for n in nodes:
+        if has_excluded_name(G.nodes[n]['label']) is False:
+            try:
+                full_list += G.nodes[n]['alias_ids']
+            except Exception as e:
+                full_list.append(n)
+    return full_list 
+
+
+def get_unlabeled_companies(G):
+    return [n for n in G.nodes if 'label' not in G.nodes[n].keys()]
 
 
 def expand_nodes(nodes:list):
@@ -129,13 +177,7 @@ def expand_graph(G:nx.MultiGraph, node_list = []) ->list:
     node_ids = []
     
     if len(node_list) == 0:
-        # print("expanding all nodes")
-        # gids = get_graph_ids(G)
-        # for g in gids:
-        #     gids[g] = get_alias_ids(G, gids[g])
-        #     node_ids += gids[g]
         node_list = list(G.nodes())
-    # else: 
     
     print(f"expanding {len(node_list)} nodes")
     node_ids = get_alias_ids(G, node_list)
@@ -149,6 +191,7 @@ def expand_graph(G:nx.MultiGraph, node_list = []) ->list:
 def divide_list(l, n):   
     for i in range(0, len(l), n):  
         yield l[i:i + n] 
+
 
 def extract_name_parts(G:nx.MultiGraph):
     name_nodes = get_nodes_by_attribute(G, "tidy", "name")
@@ -200,20 +243,15 @@ def extract_street_parts(G:nx.MultiGraph):
     return pd.DataFrame(records).fillna('')
 
 
-def get_graph_ids(G):
-    return {
-        "file_numbers": [ n for n in G.nodes if n[:1] in ['C', 'L']],
-        "address_ids":  [ n for n in G.nodes if n[:1] == "A" ],
-        "name_ids":     [ n for n in G.nodes if n[:1] == "N" ]
-    }
-
 def get_ilsos_node(G, nodes:list):
     for n in nodes:
         if n in G:
             if G.nodes[n]['data_source'] == "il_sos":
                 return n 
 
+
 def combine_nodes(G, nodes:list):
+    nodes = sorted(nodes)
     ilsos_node = get_ilsos_node(G, nodes)
     keep_node = nodes[0] if ilsos_node is None else ilsos_node
     merge_data = {}
@@ -288,14 +326,6 @@ def combine_entitity_list(entity_lists:list):
     return combined
 
 
-def clean_columns(df:pd.DataFrame)->pd.DataFrame:
-    lowercase = { 
-        c: c.lower().strip().replace(' ', '_') 
-        for c in df.columns }
-    df = df.rename(columns=lowercase)
-    return df
-
-
 def get_nodes_by_attribute(G: nx.MultiGraph, key:str, filter_value:str) -> list:
     node_attributes = G.nodes(data=key, default = None)
     return [ n[0] for n in node_attributes if n[1] == filter_value ]
@@ -356,10 +386,138 @@ def deduplicate_edges(G):
     G.add_edges_from(zip(source, target, attr))
     return G    
 
+    
+def get_connected_nodes(G, node, nbrhood:dict = {}) -> dict:
+    graph = G.to_undirected(as_view=True)
+    if node in graph:
+        nbrs = nx.neighbors(graph, node)
+        nbrhood[node] = nbrs
+        for n in nbrs:
+            if n not in nbrhood:
+                nbrhood.update(get_connected_nodes(graph, n, nbrhood))
+        return nbrhood
+    else:
+        return nbrhood 
 
 
 
+def get_node_label(G, node):
+    return G.nodes[node]['label'] if 'label' in G.nodes[node].keys() else node 
 
+
+def get_node_frame(G, include_aliases=False):
+    records = []
+    for node in G.nodes:
+        record = {
+            "node_id": node, 
+            **G.nodes[node]
+        }
+        if 'merge_data' in record.keys() and include_aliases is True:
+            labels = [] 
+            for m in record['merge_data']:
+                if 'label' in record['merge_data'][m]:
+                    labels.append(record['merge_data'][m]['label'])
+                sub_record = {"node_id": node, "alias_id": m, **record['merge_data'][m]}
+                records.append(sub_record)
+            record['merged_with'] = labels
+        records.append(record)
+    df = pd.DataFrame(records)
+    
+    drop_cols = ['contraction', 'dg_type', 'tidy']
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    
+    main_cols = [ c for c in ['label', 'type', 'data_source',  'merged_with', 'node_id', 'alias_id'] if c in df.columns ]
+    other_cols = [ c for c in df.columns if c not in main_cols ]
+    # return df.drop_duplicates()
+    # columns = [c for c in ['label', 'type', 'data_source', 'tidy',  'merged_with', 'node_id', 'alias_id'] if c in df.columns]
+    return df[[*main_cols, *other_cols]].sort_values(['type', 'label'])
+
+
+def join_unique_list(x):
+    return "; ".join(list(set(x.dropna())))
+
+def get_edge_record(G, edge, direction):
+    if direction == "inbound": 
+        if edge[2]['type'] == "address": 
+            record = {
+                "node1_id": edge[1], 
+                "node1": get_node_label(G, edge[1]),
+                "relationship": "of",
+                "node2_id": edge[0], 
+                "node2": get_node_label(G, edge[0]), 
+                **edge[2]
+            }
+        else: 
+            record = {
+                "node1_id": edge[1], 
+                "node1": get_node_label(G, edge[1]),
+                "relationship": "is",
+                "node2_id": edge[0], 
+                "node2": get_node_label(G, edge[0]), 
+                **edge[2]
+            }
+    elif direction == "outbound": 
+        if edge[2]['type'] == 'address':
+            record = {
+                "node1_id": edge[0], 
+                "node1": get_node_label(G, edge[0]),
+                "relationship": "is",
+                "node2_id": edge[1], 
+                "node2": get_node_label(G, edge[1]), 
+                **edge[2]
+            }
+        else:
+            record = {
+                    "node1_id": edge[0], 
+                    "node1": get_node_label(G, edge[0]),
+                    "relationship":"of",
+                    "node2_id": edge[1], 
+                    "node2": get_node_label(G, edge[1]), 
+                    **edge[2]
+                }
+    return record 
+
+
+def get_edge_records(G, node, direction): 
+    edges = G.in_edges(node, data=True) if direction == "inbound" else G.out_edges(node, data=True)
+    records = [ get_edge_record(G, e, direction) for e in edges ]
+    return records 
+
+
+def get_edge_frame(G):
+    
+    node_labels = dict(G.nodes(data="label", default=""))
+    edge_records = []
+    
+    for node in G.nodes():
+        edge_records.extend(get_edge_records(G, node, "inbound"))
+        edge_records.extend(get_edge_records(G, node, "outbound"))
+        
+    df = ( pd.DataFrame(edge_records)
+            .pipe(lambda df: df[df['type'] != "company"])
+            .assign(for_company = lambda df: df['file_number'].apply(lambda x: node_labels.get(x, x) if pd.notna(x) else float('nan')))
+    )
+    
+    drop_cols = ['node1_id', 'node2_id', 'contraction', 'file_number']
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    
+    main_cols = ['node1','type', 'relationship', 'node2', 'for_company']
+    other_cols = [c for c in df.columns if c not in main_cols]
+    return df.drop_duplicates()[[*main_cols, *other_cols]]
+
+
+def get_overview_frame(G):
+    ef = get_edge_frame(G)
+    return (ef
+            .assign(relationship = lambda df: df['type'] + " " + df['relationship'])
+            .groupby(['node1', 'relationship'])
+            .agg({"node2": join_unique_list})
+            .reset_index()
+            .pivot(index=['node1'], columns = ['relationship'], values='node2')
+            .reset_index()
+            .fillna('')
+            )  
+    
 ### DATA PORTAL FUNCTIONS
 
 def search_data_set(resource, keyword):
@@ -400,23 +558,32 @@ def search_data_portal(keywords:list, resource_id:str = 'rsxa-ify5', prefix:str 
     else:
         return pd.DataFrame()
 
-    
-def get_connected_nodes(G, node, nbrhood:dict = {}) -> dict:
-    if node in G:
-        nbrs = nx.neighbors(G, node)
-        nbrhood[node] = nbrs
-        for n in nbrs:
-            if n not in nbrhood:
-                nbrhood.update(get_connected_nodes(G, n, nbrhood))
-        return nbrhood
-    else:
-        return nbrhood 
+
 
 
 ### Path graph    
 def get_path_graph(G, node_1, node_2):
     path_nodes = set()
-    shortest_paths = list(nx.all_shortest_paths(G, node_1, node_2))
+    shortest_paths = list(nx.all_shortest_paths(G.to_undirected(as_view=True), node_1, node_2))
     for path in shortest_paths:
         path_nodes.update(path)
     return nx.induced_subgraph(G, list(path_nodes))
+
+
+
+def export_sheet(df, writer, sheet):
+    col_widths = {
+        "relationship": 10,
+        "type": 10, 
+        "data_source": 20,
+        "node_id": 20, 
+        "tidy": 10,
+    }
+    workbook=writer.book
+    df.to_excel(writer, sheet, index=False)
+    wrap = workbook.add_format({'text_wrap': True})
+    for column in df:
+        column_width = max(df[column].astype(str).map(len).max(), len(column))
+        col_idx = df.columns.get_loc(column)
+        writer.sheets[sheet].set_column(col_idx, col_idx, col_widths.get(column, 25), wrap)
+            

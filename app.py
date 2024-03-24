@@ -10,8 +10,8 @@ from shiny.types import FileInfo
 from htmltools import TagList, div
 from qng import GraphSchema, NodeFactory, LinkFactory, GraphFactory, SigmaFactory, Element, QNG
 
-def download_handler():
-    return file_buffer()
+# def download_handler():
+#     return file_buffer()
 
 def load_schema(filename:str):
     with open(filename, 'r') as f:
@@ -80,7 +80,7 @@ app_ui = ui.page_fillable(
     
     ui.div(
         ui.h2("Dese Guys", style="{margin: 0 0 0 0;}"),
-        ui.TagList(ui.help_text("A "), ui.a("Public Data Tools", href="http://publicdatatools.com"), ui.help_text(" project")),
+        ui.TagList(ui.help_text("A "), ui.a("Public Data Tools", href="http://publicdatatools.com"), ui.help_text(" project for making "), ui.a("Quick Network Graphs", href="http://bit.ly/qng"), ui.help_text(" using business data from the "), ui.a("IL SOS", href="https://www.ilsos.gov/data/bus_serv_home.html")),
     ),
     
     ui.div(
@@ -111,6 +111,7 @@ app_ui = ui.page_fillable(
                                         placement="right"
                                     ),
                                     ui.download_button("export_entities", "Export business data"),
+                                    ui.download_button("export_xlsx", "Export table view (XLSX)"),
                                 ),
                                 ui.card(
                                     ui.card_header(tooltip("Save/Load QNG Graph File")),
@@ -183,6 +184,21 @@ app_ui = ui.page_fillable(
                     col_widths = (7,3,2),
                 ),
             ),
+            ui.accordion_panel("Table view", 
+                ui.navset_card_tab(
+                    ui.nav_panel("Overview", 
+                        ui.output_data_frame("graph_summary")
+                    ),
+                    ui.nav_panel("Nodes", 
+                        ui.output_data_frame("graph_nodes")
+                    ),
+                    ui.nav_panel("Links",
+                        ui.output_data_frame("graph_edges")
+                    ),
+                )
+                               
+            ), 
+            
             id="accordion_controls"
         ),
         # id="mainbox",
@@ -197,16 +213,30 @@ def server(input, output, session):
     ### System State         
     entities = reactive.value([])
     all_entities = reactive.value([])  
-    G = reactive.value(nx.MultiGraph())
+    G = reactive.value(nx.MultiDiGraph())
     nodes = reactive.value({})
     build_count = reactive.value(0)
-    manually_combined = reactive.value([])
+    merged = reactive.value([])
     connected_nodes = reactive.value({})
     
     ### Factories
     SF = reactive.value(SigmaFactory(clickable_edges=True))
     viz = reactive.value()
     
+    @render.data_frame
+    def graph_nodes():
+        if len(G()) > 0:
+            return render.DataGrid(get_node_frame(G()), width="100%")
+   
+    @render.data_frame
+    def graph_edges():
+        if len(G()) > 0:
+            return render.DataGrid(get_edge_frame(G()), width="100%")
+    
+    @render.data_frame
+    def graph_summary():
+        if len(G()) > 0: 
+            return render.DataGrid(get_overview_frame(G()), width="100%")
     
     def get_connected_to_selected():
         selected = get_selected_nodes()
@@ -215,7 +245,64 @@ def server(input, output, session):
             connected.update(get_connected_nodes(G(), s, connected))
         # connected_nodes.set(connected)
         return connected 
-            
+    
+    ### Clicked Search
+    @reactive.effect
+    @reactive.event(input.search_btn)
+    def search_click():
+        search(input.name_search().upper(), input.addr_search().upper(), input.file_number_search())
+
+    @ui.bind_task_button(button_id = 'search_btn')
+    @reactive.extended_task
+    async def search(name_search:str, addr_search:str, file_number_search:str) -> list:
+
+        print("retrieving ids")
+        name_ids = get_name_ids(name_search) if len(name_search) > 0 else []
+        address_ids = get_address_ids(addr_search) if len(addr_search) > 0 else []
+        print(name_ids, address_ids)    
+        
+        print("retrieving entities")
+        name_entities = get_entities('name_id', name_ids)
+        addr_entities = get_entities('address_id', address_ids)
+        file_numbers = [e.file_number for e in name_entities] + [e.file_number for e in addr_entities]
+        
+        fn_entities = get_entities_by_file_number(file_number_search) if len(file_number_search) > 0 else []
+        fn_entities += get_entities("file_number", file_numbers)
+        
+        combined = combine_entitity_list([name_entities, addr_entities, fn_entities])
+        print("entities:", len(combined))
+        return combined 
+
+    @reactive.effect
+    @reactive.event(search.result)
+    def set_entities():
+        print("setting entities")
+        result = search.result()
+        if len(result) > 0:
+            all_now = all_entities() + result
+            all_entities.set(all_now)    
+            entities.set(result)
+        else: 
+            m = get_modal(
+                title=None,
+                prompt="No results",
+                buttons = [ui.modal_button("OK")]
+            )
+            ui.modal_show(m)
+        
+    ### Build graph from entities
+    @reactive.effect
+    @reactive.event(entities, search.result)
+    def build_graph():
+        print("building graph")
+        graph = graph_entities(G().copy(), gfs, entities(), merged())
+        
+        if len(graph) > 0:
+            G.set(graph)
+            builds = build_count() + 1
+            build_count.set(builds)
+        
+                    
     
     @reactive.Effect
     @reactive.event(input.file1)
@@ -315,49 +402,7 @@ def server(input, output, session):
         viz.set(SF().make_sigma(PG))
 
             
-    ### Clicked Search
-    @reactive.effect
-    @reactive.event(input.search_btn)
-    def search_click():
-        search(input.name_search().upper(), input.addr_search().upper(), input.file_number_search())
 
-    @ui.bind_task_button(button_id = 'search_btn')
-    @reactive.extended_task
-    async def search(name_search:str, addr_search:str, file_number_search:str) -> list:
-
-        print("retrieving ids")
-        name_ids = get_name_ids(name_search) if len(name_search) > 0 else []
-        address_ids = get_address_ids(addr_search) if len(addr_search) > 0 else []
-        print(name_ids, address_ids)    
-        
-        print("retrieving entities")
-        name_entities = get_entities('name_id', name_ids)
-        addr_entities = get_entities('address_id', address_ids)
-        file_numbers = [e.file_number for e in name_entities] + [e.file_number for e in addr_entities]
-        
-        fn_entities = get_entities_by_file_number(file_number_search) if len(file_number_search) > 0 else []
-        fn_entities += get_entities("file_number", file_numbers)
-        
-        combined = combine_entitity_list([name_entities, addr_entities, fn_entities])
-        print("entities:", len(combined))
-        return combined 
-
-    @reactive.effect
-    @reactive.event(search.result)
-    def set_entities():
-        print("setting entities")
-        result = search.result()
-        if len(result) > 0:
-            all_now = all_entities() + result
-            all_entities.set(all_now)    
-            entities.set(result)
-        else: 
-            m = get_modal(
-                title=None,
-                prompt="No results",
-                buttons = [ui.modal_button("OK")]
-            )
-            ui.modal_show(m)
 
 
 
@@ -369,7 +414,7 @@ def server(input, output, session):
             if viz().get_selected_node() is not None:
                 selected += [ viz().get_selected_node() ]
                 
-            selected += [ nodes().get(n) for n in input.selected_nodes() ]
+            selected += [ n for n in input.selected_nodes() ]
                 
             neighbors = []
             if input.and_neighbors():
@@ -408,47 +453,11 @@ def server(input, output, session):
     def _():
         
         selected = get_selected_nodes()
+        print("Combining nodes: ", selected)
         new_graph = combine_nodes(G(), selected)
         
-        new_combined = manually_combined().copy()
-        new_combined.append(selected)
-        manually_combined.set(new_combined)
-        
+        merged.set( merged() + [selected])    
         G.set(new_graph)
-        
-    ### Build graph from entities
-    @reactive.effect
-    @reactive.event(entities, search.result)
-    def build_graph():
-        print("building graph")
-        graph = G().copy()   
-        graph = nx.compose(graph, gfs['company'].make_graphs([ e.company_dict() for e in entities() ], "il_sos"))
-        graph = nx.compose(graph, gfs['name'].make_graphs([ e.name_dict() for e in entities() ],"il_sos"))
-        graph = nx.compose(graph, gfs['address'].make_graphs([e.address_dict() for e in entities() ], "il_sos"))   
-        graph = nx.compose(graph, gfs['links'].make_graphs([e.link_dict() for e in entities()], "il_sos"))
-        
-        unlabeled = get_unlabeled_companies(graph)
-        companies = get_companies(unlabeled)
-        graph = nx.compose(graph, gfs['company'].make_graphs([ c.company_dict() for c in companies ], "il_sos"))
-        
-        for c in manually_combined():
-            graph = combine_nodes(graph, c)
-        
-        excluded_nodes = get_excluded_nodes(graph)
-        for en in excluded_nodes:
-            if " DISSOLUTION" in graph.nodes[en]['label'] or "REVOKED " in graph.nodes[en]['label']:
-                for nbr in graph.neighbors(en):
-                    if graph.nodes[nbr]['type'] == "company":
-                        graph.nodes[nbr]['type'] = "company (inactive)"
-            
-            graph.remove_node(en)
-        
-        if len(graph) > 0:
-            graph = deduplicate_edges(graph)
-            G.set(graph)
-            builds = build_count() + 1
-            build_count.set(builds)
-        
 
     
     
@@ -531,7 +540,8 @@ def server(input, output, session):
     @reactive.event(expand.result) 
     def set_expanded_graph():        
         new_entities = expand.result()
-        entities.set(entities() + new_entities)
+        all_entities.set(entities() + new_entities)
+        entities.set(new_entities)
 
     @reactive.effect
     def _():
@@ -629,5 +639,14 @@ def server(input, output, session):
         qng = QNG(adjacency=adj, node_attrs=attrs, sigma_factory=SF())
         yield msgspec.json.encode(qng)
 
+
+    @render.download(filename="graph_tables.xlsx" )
+    def export_xlsx():        
+        with io.BytesIO() as buf:
+            with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+                export_sheet(get_overview_frame(G()), writer, "Summary")
+                export_sheet(get_edge_frame(G()), writer, "Links")
+                export_sheet(get_node_frame(G()), writer, "Nodes")
+            yield buf.getvalue()
 
 app = App(app_ui, server)
